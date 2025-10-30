@@ -1,7 +1,10 @@
 package pages
 
 import (
+	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"iter"
 	"path"
 	"slices"
@@ -23,28 +26,93 @@ type HttpStatusCodeType struct {
 }
 
 type HttpStatusCodePage struct {
-	Revision  int
-	CodeTypes []HttpStatusCodeType
+	Revision  int                  `json:"revision"`
+	CodeTypes []HttpStatusCodeType `json:"code_types"`
+}
+
+func (h *HttpStatusCodePage) ByType(t string) *HttpStatusCodePage {
+	idx := slices.IndexFunc(h.CodeTypes, func(ct HttpStatusCodeType) bool {
+		return strings.Contains(strings.ToLower(ct.Type), strings.ToLower(t))
+	})
+
+	if idx != -1 {
+		h.CodeTypes = h.CodeTypes[idx : idx+1]
+	}
+	return h
+}
+
+func (h *HttpStatusCodePage) ByCode(c string) *HttpStatusCodePage {
+	for codeTypeIdx, codeType := range h.CodeTypes {
+		idx := slices.IndexFunc(codeType.Codes, func(s HttpStatusCode) bool {
+			return strings.ToLower(s.Code) == strings.ToLower(c)
+		})
+
+		if idx != -1 {
+			h.CodeTypes = h.CodeTypes[codeTypeIdx : codeTypeIdx+1]
+			h.CodeTypes[0].Codes = h.CodeTypes[0].Codes[idx : idx+1]
+			break
+		}
+	}
+	return h
 }
 
 func (h *HttpStatusCodePage) ToJson() (string, error) {
-	j, err := json.MarshalIndent(h.CodeTypes, "  ", "    ")
+	j, err := json.MarshalIndent(h.CodeTypes, " ", "  ")
 	if err != nil {
 		return "", err
 	}
 	return string(j), err
 }
 
+func (h *HttpStatusCodePage) Serialize() (string, error) {
+	in, err := json.Marshal(h)
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(in), nil
+}
+
+func Deserialize(in []byte) (*HttpStatusCodePage, error) {
+	if len(in) != 0 {
+		out, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(in)))
+		if err != nil {
+			return nil, err
+		}
+
+		var h *HttpStatusCodePage
+		if err = json.Unmarshal(out, h); err != nil {
+			return nil, err
+		}
+		return h, nil
+	}
+	return nil, errors.New("empty bytes to deserialize")
+}
+
 func ParseHttpStatusCodesPage(html *html.Node) *HttpStatusCodePage {
 	return getHttpStatusList(html)
+}
+
+func HttpStatusCodesPageRevision(html *html.Node) int {
+	return getRevisionOnly(html)
+}
+
+func getRevisionOnly(htmlNode *html.Node) int {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	for node := range streamHtmlNodes(ctx, htmlNode) {
+		if node.Type == html.ElementNode && node.Data == "html" {
+			return collectRevision(node)
+		}
+	}
+	return 0
 }
 
 func getHttpStatusList(htmlNode *html.Node) *HttpStatusCodePage {
 	var revision int
 	codeTypes := make([]HttpStatusCodeType, 0, 11)
 
-	var walk func(*html.Node)
-	walk = func(node *html.Node) {
+	for node := range streamHtmlNodes(context.Background(), htmlNode) {
 		if node.Type == html.ElementNode && node.Data == "html" {
 			revision = collectRevision(node)
 		}
@@ -57,13 +125,7 @@ func getHttpStatusList(htmlNode *html.Node) *HttpStatusCodePage {
 				Codes: codes,
 			})
 		}
-
-		for child := node.FirstChild; child != nil; child = child.NextSibling {
-			walk(child)
-		}
 	}
-
-	walk(htmlNode)
 
 	slices.SortFunc(codeTypes, func(a, b HttpStatusCodeType) int {
 		return strings.Compare(a.Type, b.Type)
@@ -75,12 +137,43 @@ func getHttpStatusList(htmlNode *html.Node) *HttpStatusCodePage {
 	}
 }
 
+func streamHtmlNodes(ctx context.Context, htmlNode *html.Node) <-chan *html.Node {
+	nodeChan := make(chan *html.Node, 1)
+
+	var walk func(*html.Node)
+	walk = func(node *html.Node) {
+		if node.Type == html.ElementNode {
+			nodeChan <- node
+		}
+
+		var child *html.Node
+		for child = node.FirstChild; child != nil; child = child.NextSibling {
+			select {
+			case <-ctx.Done():
+				close(nodeChan)
+				return
+			default:
+				walk(child)
+			}
+		}
+	}
+
+	go func() {
+		walk(htmlNode)
+		close(nodeChan)
+	}()
+	return nodeChan
+}
+
 func collectRevision(node *html.Node) int {
 	for _, n := range node.Attr {
 		if n.Key == "about" {
 			revPath := path.Base(n.Val)
-			// do nothing in case fails revision
-			revision, _ := strconv.Atoi(revPath)
+			revision, err := strconv.Atoi(revPath)
+			if err != nil {
+				// do nothing if fails, just skip it
+				break
+			}
 			return revision
 		}
 	}
