@@ -14,7 +14,7 @@ import (
 var cmd = hst{}
 
 type hst struct {
-	StatusType string `optional:"" short:"t" long:"statu-type" default:"" help:"HTTP status code types name to filter"`
+	StatusType string `optional:"" short:"t" long:"status-type" default:"" help:"HTTP status code types name to filter"`
 	Code       string `optional:"" short:"c" long:"code" default:"" help:"HTTP status code to filter i.e:(401, 222, 1xx)"`
 }
 
