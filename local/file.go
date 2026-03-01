@@ -23,7 +23,7 @@ func Write(p *pages.HttpStatusCodePage) error {
 	return os.WriteFile(fName, []byte(serialize), 0666)
 }
 
-func Source() (*pages.HttpStatusCodePage, error) {
+func SourceHTML() (*pages.HttpStatusCodePage, error) {
 	homedir, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err

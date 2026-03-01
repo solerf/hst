@@ -31,13 +31,13 @@ func Test_Parse_HttpStatus_Page(t *testing.T) {
 		return []assertion{
 			func() string {
 				if p.Revision != 1317392915 {
-					return fmt.Sprintf("unexpected [Revision] %v", p.Revision)
+					return fmt.Sprintf("unexpected [Revision] `%v`", p.Revision)
 				}
 				return ""
 			},
 			func() string {
 				if len(expectations) != len(p.CodeTypes) {
-					return fmt.Sprintf("invalid [CodeTypes] size: expected %v, got %v", len(expectations), len(p.CodeTypes))
+					return fmt.Sprintf("invalid [CodeTypes] size: expected `%v`, got `%v`", len(expectations), len(p.CodeTypes))
 				}
 				return ""
 			},
@@ -49,13 +49,13 @@ func Test_Parse_HttpStatus_Page(t *testing.T) {
 					})
 
 					if idx == -1 {
-						results = append(results, fmt.Sprintf("missing [%v] in page", k))
+						results = append(results, fmt.Sprintf("missing [`%v`] in page", k))
 						continue
 					}
 
 					actualSize := len(p.CodeTypes[idx].Codes)
 					if size != actualSize {
-						results = append(results, fmt.Sprintf("invalid [%v] size: expected %v, got %v", k, size, actualSize))
+						results = append(results, fmt.Sprintf("invalid [`%v`] size: expected `%v`, got `%v`", k, size, actualSize))
 						continue
 					}
 				}
@@ -66,7 +66,7 @@ func Test_Parse_HttpStatus_Page(t *testing.T) {
 				for _, ct := range p.CodeTypes {
 					_, ok := expectations[ct.Type]
 					if !ok {
-						results = append(results, fmt.Sprintf("unexpected [%v] in page", ct.Type))
+						results = append(results, fmt.Sprintf("unexpected [`%v`] in page", ct.Type))
 						continue
 					}
 				}
@@ -85,7 +85,7 @@ func Test_Parse_HttpStatus_Page(t *testing.T) {
 		return failures
 	}
 
-	file, err := os.ReadFile("testdata/httpstatus_page.html")
+	file, err := os.ReadFile("../testdata/httpstatus_page.html")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,14 +96,13 @@ func Test_Parse_HttpStatus_Page(t *testing.T) {
 	}
 
 	page := ParseHttpStatusCodesPage(hDoc)
-	result := assertionsRun(assertions(page))
-	if len(result) > 0 {
-		t.Errorf("\n%v", strings.Join(result, "\n"))
+	if result := assertionsRun(assertions(page)); len(result) > 0 {
+		t.Errorf("\n`%v`", strings.Join(result, "\n"))
 	}
 }
 
 func Benchmark_Parse_HttpStatus_Page(b *testing.B) {
-	file, err := os.ReadFile("testdata/httpstatus_page.html")
+	file, err := os.ReadFile("../testdata/httpstatus_page.html")
 	if err != nil {
 		b.Fatal(err)
 	}

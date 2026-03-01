@@ -11,6 +11,8 @@ import (
 	"golang.org/x/net/html"
 )
 
+const maxDaysLocal = 30
+
 var cmd = hst{}
 
 type hst struct {
@@ -42,28 +44,42 @@ func (h *hst) Run() error {
 }
 
 func run() (*pages.HttpStatusCodePage, error) {
-	localFile, _ := local.Source()
-	h, rev, err := sourceHtmlWithRevision()
+	localSrc, localRev, err := localHTMLWithRevision()
 
-	if localFile == nil && err != nil {
-		return nil, err
-	}
+	isSourceRemote := err != nil || time.Now().Sub(localSrc.Date).Hours()/24 > maxDaysLocal
 
-	if localFile == nil || localFile.Revision < rev {
-		localFile = pages.ParseHttpStatusCodesPage(h)
-		if err = local.Write(localFile); err != nil {
-			return nil, err
+	if isSourceRemote {
+		remoteSrc, remoteRev, remoteErr := requestHtmlWithRevision()
+		if remoteErr != nil {
+			return nil, fmt.Errorf("impossible to load status page: %w", remoteErr)
+		}
+
+		if localRev < remoteRev {
+			localSrc = pages.ParseHttpStatusCodesPage(remoteSrc)
+			// just ignore
+			_ = local.Write(localSrc)
 		}
 	}
 
-	return localFile, nil
+	return localSrc, nil
 }
 
-func sourceHtmlWithRevision() (*html.Node, int, error) {
+func localHTMLWithRevision() (*pages.HttpStatusCodePage, int, error) {
+	var localSrc *pages.HttpStatusCodePage
+	var err error
+
+	localSrc, err = local.SourceHTML()
+	if err != nil {
+		return nil, 0, err
+	}
+	return localSrc, localSrc.Revision, nil
+}
+
+func requestHtmlWithRevision() (*html.Node, int, error) {
 	ctx, cancelFunc := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelFunc()
 
-	h, err := wikipedia.SourceHMTL(ctx, wikipedia.ListOfHttpStatusCodesUrl)
+	h, err := wikipedia.SourceHTML(ctx, wikipedia.ListOfHttpStatusCodesUrl)
 	if err != nil {
 		return nil, 0, err
 	}

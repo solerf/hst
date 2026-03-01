@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/net/html"
 )
@@ -28,6 +29,7 @@ type HttpStatusCodeType struct {
 type HttpStatusCodePage struct {
 	Revision  int                  `json:"revision"`
 	CodeTypes []HttpStatusCodeType `json:"code_types"`
+	Date      time.Time            `json:"date"`
 }
 
 func (h *HttpStatusCodePage) ByType(t string) *HttpStatusCodePage {
@@ -134,6 +136,7 @@ func getHttpStatusList(htmlNode *html.Node) *HttpStatusCodePage {
 	return &HttpStatusCodePage{
 		Revision:  revision,
 		CodeTypes: codeTypes,
+		Date:      time.Now(),
 	}
 }
 
