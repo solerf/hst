@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"iter"
 	"path"
 	"slices"
@@ -61,15 +62,15 @@ func (h *HttpStatusCodePage) ByCode(c string) *HttpStatusCodePage {
 func (h *HttpStatusCodePage) ToJson() (string, error) {
 	j, err := json.MarshalIndent(h.CodeTypes, " ", "  ")
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("marshal json: %w", err)
 	}
-	return string(j), err
+	return string(j), nil
 }
 
 func (h *HttpStatusCodePage) Serialize() (string, error) {
 	in, err := json.Marshal(h)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("marshal json hst: %w", err)
 	}
 	return base64.StdEncoding.EncodeToString(in), nil
 }
@@ -78,12 +79,12 @@ func Deserialize(in []byte) (*HttpStatusCodePage, error) {
 	if len(in) != 0 {
 		out, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(in)))
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("decoding hst: %w", err)
 		}
 
 		var h *HttpStatusCodePage
 		if err = json.Unmarshal(out, h); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("unmarshal hst: %w", err)
 		}
 		return h, nil
 	}

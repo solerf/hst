@@ -14,7 +14,7 @@ const ListOfHttpStatusCodesUrl = "https://en.wikipedia.org/w/rest.php/v1/page/Li
 func SourceHTML(ctx context.Context, url string) (*html.Node, error) {
 	request, err := http.NewRequestWithContext(ctx, "GET", url, http.NoBody)
 	if err != nil {
-		return nil, fmt.Errorf("request %v: %w", url, err)
+		return nil, fmt.Errorf("create request to %v: %w", url, err)
 	}
 
 	request.Header.Add("User-Agent", "any-project")
@@ -31,7 +31,7 @@ func SourceHTML(ctx context.Context, url string) (*html.Node, error) {
 
 	response, err := cli.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("requesting %v: %w", url, err)
+		return nil, fmt.Errorf("requesting to %v: %w", url, err)
 	}
 
 	defer response.Body.Close()
@@ -41,7 +41,7 @@ func SourceHTML(ctx context.Context, url string) (*html.Node, error) {
 
 	node, err := html.Parse(response.Body)
 	if err != nil {
-		return nil, fmt.Errorf("reading %v: %w", url, err)
+		return nil, fmt.Errorf("reading response %v: %w", url, err)
 	}
 	return node, nil
 }
