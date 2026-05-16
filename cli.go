@@ -3,17 +3,15 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/solerf/hst/local"
 	"github.com/solerf/hst/pages"
 	"github.com/solerf/hst/wikipedia"
-	"golang.org/x/net/html"
 )
 
-const maxDaysLocal = 30
-
-var cmd = hst{}
+const maxAgeLocal = 15 * 24 * time.Hour
 
 type hst struct {
 	StatusType string `optional:"" short:"t" long:"status-type" default:"" help:"HTTP status code types name to filter"`
@@ -21,68 +19,94 @@ type hst struct {
 }
 
 func (h *hst) Run() error {
-	p, err := run()
+	dir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("get home dir: %w", err)
+	}
+
+	p, err := run(dir)
 	if err != nil {
 		return err
 	}
 
-	if len(h.StatusType) != 0 {
-		p = p.ByType(h.StatusType)
-	}
-
-	if len(h.Code) != 0 {
-		p = p.ByCode(h.Code)
-	}
-
-	json, err := p.ToJson()
+	out, err := renderFiltered(p, h.StatusType, h.Code)
 	if err != nil {
 		return err
 	}
 
-	fmt.Println(json)
+	fmt.Println(out)
 	return nil
 }
 
-func run() (*pages.HttpStatusCodePage, error) {
-	localSrc, localRev, err := localHTMLWithRevision()
-
-	isSourceRemote := err != nil || time.Now().Sub(localSrc.Date).Hours()/24 > maxDaysLocal
-
-	if isSourceRemote {
-		remoteSrc, remoteRev, remoteErr := requestHtmlWithRevision()
-		if remoteErr != nil {
-			return nil, fmt.Errorf("impossible to load status page: %w", remoteErr)
-		}
-
-		if localRev < remoteRev {
-			localSrc = pages.ParseHttpStatusCodesPage(remoteSrc)
-			// just ignore
-			_ = local.Write(localSrc)
+func renderFiltered(p *pages.HttpStatusCodePage, statusType, code string) (string, error) {
+	if statusType != "" {
+		var ok bool
+		p, ok = p.ByStatusType(statusType)
+		if !ok {
+			return "", fmt.Errorf("no status type matching %q", statusType)
 		}
 	}
 
-	return localSrc, nil
+	if code != "" {
+		var ok bool
+		p, ok = p.ByPrefixCode(code)
+
+		if !ok {
+			return "", fmt.Errorf("no status code matching %q", code)
+		}
+	}
+
+	return p.ToJson()
 }
 
-func localHTMLWithRevision() (*pages.HttpStatusCodePage, int, error) {
-	var localSrc *pages.HttpStatusCodePage
-	var err error
+func run(homeDir string) (*pages.HttpStatusCodePage, error) {
+	localSrc, _ := local.SourceHTML(homeDir)
 
-	localSrc, err = local.SourceHTML()
+	if localSrc != nil && time.Since(localSrc.Date) <= maxAgeLocal {
+		return localSrc, nil
+	}
+
+	remoteRev, err := reqWithTimeout(requestRevision)
 	if err != nil {
-		return nil, 0, err
+		return nil, fmt.Errorf("impossible to load page revision: %w", err)
 	}
-	return localSrc, localSrc.Revision, nil
+
+	if localSrc != nil && localSrc.Revision >= remoteRev {
+		localSrc.Date = time.Now()
+		writeCache(homeDir, localSrc)
+		return localSrc, nil
+	}
+
+	fresh, err := reqWithTimeout(requestHtml)
+	if err != nil {
+		return nil, fmt.Errorf("impossible to load page html: %w", err)
+	}
+	fresh.Revision = remoteRev
+	writeCache(homeDir, fresh)
+
+	return fresh, nil
 }
 
-func requestHtmlWithRevision() (*html.Node, int, error) {
-	ctx, cancelFunc := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancelFunc()
+func writeCache(homeDir string, p *pages.HttpStatusCodePage) {
+	if err := local.Write(homeDir, p); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: cache write failed: %v\n", err)
+	}
+}
 
+func reqWithTimeout[T any](f func(context.Context) (T, error)) (T, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return f(ctx)
+}
+
+func requestHtml(ctx context.Context) (*pages.HttpStatusCodePage, error) {
 	h, err := wikipedia.SourceHTML(ctx, wikipedia.ListOfHttpStatusCodesUrl)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
+	return pages.ParseHttpStatusCodesPage(h, 0), nil
+}
 
-	return h, pages.HttpStatusCodesPageRevision(h), nil
+func requestRevision(ctx context.Context) (int, error) {
+	return wikipedia.SourceRevision(ctx, wikipedia.RevisionOfHttpStatusCodesUrl)
 }

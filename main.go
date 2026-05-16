@@ -3,7 +3,6 @@ package main
 import "github.com/alecthomas/kong"
 
 func main() {
-	kong.UsageOnError()
-	kCtx := kong.Parse(&cmd)
+	kCtx := kong.Parse(&hst{}, kong.UsageOnError())
 	kCtx.FatalIfErrorf(kCtx.Run())
 }

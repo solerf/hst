@@ -1,17 +1,15 @@
 package pages
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
-	"path"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"golang.org/x/net/html"
 )
@@ -33,30 +31,44 @@ type HttpStatusCodePage struct {
 	Date      time.Time            `json:"date"`
 }
 
-func (h *HttpStatusCodePage) ByType(t string) *HttpStatusCodePage {
+func (h *HttpStatusCodePage) ByStatusType(t string) (*HttpStatusCodePage, bool) {
+	target := strings.ToLower(t)
 	idx := slices.IndexFunc(h.CodeTypes, func(ct HttpStatusCodeType) bool {
-		return strings.Contains(strings.ToLower(ct.Type), strings.ToLower(t))
+		return strings.Contains(strings.ToLower(ct.Type), target)
 	})
 
-	if idx != -1 {
-		h.CodeTypes = h.CodeTypes[idx : idx+1]
+	if idx == -1 {
+		return h, false
 	}
-	return h
+	h.CodeTypes = h.CodeTypes[idx : idx+1]
+	return h, true
 }
 
-func (h *HttpStatusCodePage) ByCode(c string) *HttpStatusCodePage {
-	for codeTypeIdx, codeType := range h.CodeTypes {
-		idx := slices.IndexFunc(codeType.Codes, func(s HttpStatusCode) bool {
-			return strings.ToLower(s.Code) == strings.ToLower(c)
-		})
-
-		if idx != -1 {
-			h.CodeTypes = h.CodeTypes[codeTypeIdx : codeTypeIdx+1]
-			h.CodeTypes[0].Codes = h.CodeTypes[0].Codes[idx : idx+1]
-			break
+func (h *HttpStatusCodePage) ByPrefixCode(c string) (*HttpStatusCodePage, bool) {
+	var sb strings.Builder
+	for _, r := range c {
+		if unicode.IsDigit(r) {
+			sb.WriteRune(r)
 		}
 	}
-	return h
+
+	if sb.Len() == 0 {
+		return h, false
+	}
+
+	target := sb.String()
+	for codeTypeIdx := range h.CodeTypes {
+		codes := slices.DeleteFunc(h.CodeTypes[codeTypeIdx].Codes, func(code HttpStatusCode) bool {
+			return !strings.HasPrefix(code.Code, target)
+		})
+		h.CodeTypes[codeTypeIdx].Codes = codes
+	}
+
+	h.CodeTypes = slices.DeleteFunc(h.CodeTypes, func(codeType HttpStatusCodeType) bool {
+		return len(codeType.Codes) == 0
+	})
+
+	return h, len(h.CodeTypes) > 0
 }
 
 func (h *HttpStatusCodePage) ToJson() (string, error) {
@@ -82,7 +94,7 @@ func Deserialize(in []byte) (*HttpStatusCodePage, error) {
 			return nil, fmt.Errorf("decoding hst: %w", err)
 		}
 
-		var h *HttpStatusCodePage
+		h := &HttpStatusCodePage{}
 		if err = json.Unmarshal(out, h); err != nil {
 			return nil, fmt.Errorf("unmarshal hst: %w", err)
 		}
@@ -91,43 +103,22 @@ func Deserialize(in []byte) (*HttpStatusCodePage, error) {
 	return nil, errors.New("empty bytes to deserialize")
 }
 
-func ParseHttpStatusCodesPage(html *html.Node) *HttpStatusCodePage {
-	return getHttpStatusList(html)
-}
+func ParseHttpStatusCodesPage(htmlNode *html.Node, revision int) *HttpStatusCodePage {
+	byType := make(map[string][]HttpStatusCode)
 
-func HttpStatusCodesPageRevision(html *html.Node) int {
-	return getRevisionOnly(html)
-}
-
-func getRevisionOnly(htmlNode *html.Node) int {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	for node := range streamHtmlNodes(ctx, htmlNode) {
-		if node.Type == html.ElementNode && node.Data == "html" {
-			return collectRevision(node)
+	for node := range iterHtmlNodes(htmlNode) {
+		if node.Type == html.ElementNode && node.Data == "dl" {
+			t := collectHttpStatusType(node)
+			byType[t] = append(byType[t], collectHttpStatusCodes(node.ChildNodes())...)
 		}
 	}
-	return 0
-}
 
-func getHttpStatusList(htmlNode *html.Node) *HttpStatusCodePage {
-	var revision int
-	codeTypes := make([]HttpStatusCodeType, 0, 11)
-
-	for node := range streamHtmlNodes(context.Background(), htmlNode) {
-		if node.Type == html.ElementNode && node.Data == "html" {
-			revision = collectRevision(node)
-		}
-
-		if node.Type == html.ElementNode && node.Data == "dl" {
-			statusType := collectHttpStatusType(node)
-			codes := collectHttpStatusCodes(node.ChildNodes())
-			codeTypes = append(codeTypes, HttpStatusCodeType{
-				Type:  statusType,
-				Codes: codes,
-			})
-		}
+	codeTypes := make([]HttpStatusCodeType, 0, len(byType))
+	for t, codes := range byType {
+		slices.SortFunc(codes, func(a, b HttpStatusCode) int {
+			return strings.Compare(a.Code, b.Code)
+		})
+		codeTypes = append(codeTypes, HttpStatusCodeType{Type: t, Codes: codes})
 	}
 
 	slices.SortFunc(codeTypes, func(a, b HttpStatusCodeType) int {
@@ -141,83 +132,66 @@ func getHttpStatusList(htmlNode *html.Node) *HttpStatusCodePage {
 	}
 }
 
-func streamHtmlNodes(ctx context.Context, htmlNode *html.Node) <-chan *html.Node {
-	nodeChan := make(chan *html.Node, 1)
-
-	var walk func(*html.Node)
-	walk = func(node *html.Node) {
-		if node.Type == html.ElementNode {
-			nodeChan <- node
-		}
-
-		var child *html.Node
-		for child = node.FirstChild; child != nil; child = child.NextSibling {
-			select {
-			case <-ctx.Done():
-				close(nodeChan)
-				return
-			default:
-				walk(child)
+func iterHtmlNodes(htmlNode *html.Node) iter.Seq[*html.Node] {
+	return func(yield func(*html.Node) bool) {
+		var walk func(*html.Node) bool
+		walk = func(node *html.Node) bool {
+			if node.Type == html.ElementNode && !yield(node) {
+				return false
 			}
+			for c := node.FirstChild; c != nil; c = c.NextSibling {
+				if !walk(c) {
+					return false
+				}
+			}
+			return true
 		}
-	}
-
-	go func() {
 		walk(htmlNode)
-		close(nodeChan)
-	}()
-	return nodeChan
-}
-
-func collectRevision(node *html.Node) int {
-	for _, n := range node.Attr {
-		if n.Key == "about" {
-			revPath := path.Base(n.Val)
-			revision, err := strconv.Atoi(revPath)
-			if err != nil {
-				// do nothing if fails, just skip it
-				break
-			}
-			return revision
-		}
 	}
-	return 0
 }
 
 func collectHttpStatusType(node *html.Node) string {
-	for n := range node.Parent.ChildNodes() {
-		return collectText(n)
+	for sib := node.PrevSibling; sib != nil; sib = sib.PrevSibling {
+		if sib.Type != html.ElementNode {
+			continue
+		}
+
+		switch sib.Data {
+		case "h1", "h2", "h3", "h4", "h5", "h6":
+			return collectText(sib)
+		}
+	}
+
+	if node.Parent != nil && node.Parent.FirstChild != nil {
+		return collectText(node.Parent.FirstChild)
 	}
 	return ""
 }
 
 func collectHttpStatusCodes(nodes iter.Seq[*html.Node]) []HttpStatusCode {
-	next, stop := iter.Pull(nodes)
-	defer stop()
+	var codes []HttpStatusCode
+	var code, name, description string
 
-	codes := make([]HttpStatusCode, 0, 29)
-	var code string
-	var name string
-	var description string
-
-	// the nodes should be ordered at the html
-	for {
-		node, ok := next()
-		if !ok {
-			break
-		}
-
+	for node := range nodes {
 		if node.Type != html.ElementNode {
 			continue
 		}
 
 		switch node.Data {
 		case "dt":
-			text := strings.Split(collectText(node), " ")
-			code, name = text[0], strings.Join(text[1:], "")
+			code, name, _ = strings.Cut(collectText(node), " ")
+			code = strings.TrimSpace(code)
+			name = strings.ReplaceAll(name, " ", "")
+
+			if code == "" {
+				code = "unknown"
+			}
+			if name == "" {
+				name = "unknown"
+			}
+
 		case "dd":
 			description = collectText(node)
-		default:
 		}
 
 		if len(code) > 0 && len(name) > 0 && len(description) > 0 {
@@ -238,28 +212,29 @@ func collectHttpStatusCodes(nodes iter.Seq[*html.Node]) []HttpStatusCode {
 
 func collectText(node *html.Node) string {
 	var sb strings.Builder
-	var text func(*html.Node, strings.Builder) string
-	text = func(n *html.Node, b strings.Builder) string {
+	var text func(*html.Node)
+	text = func(n *html.Node) {
 		for cn := range n.ChildNodes() {
-			switch cn.Type {
-			case html.TextNode:
+			if cn.Type == html.TextNode {
 				if len(cn.Data) > 0 {
 					sb.WriteString(cn.Data)
 					continue
 				}
-			case html.ElementNode:
+			}
+
+			if cn.Type == html.ElementNode {
 				if cn.Data != "sup" {
 					//skip citations
-					text(cn, b)
+					text(cn)
 				}
-			default:
 			}
 		}
-
-		if sb.Len() == 0 {
-			return strings.TrimSpace(n.Data)
-		}
-		return strings.TrimSpace(sb.String())
 	}
-	return text(node, sb)
+
+	text(node)
+
+	if sb.Len() == 0 {
+		return strings.TrimSpace(node.Data)
+	}
+	return strings.TrimSpace(sb.String())
 }
